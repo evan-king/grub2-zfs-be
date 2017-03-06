@@ -184,6 +184,7 @@ END
 # output_zfs_root: dataset -> void
 output_zfs_root() {
     dataset=$1 # rpool/ROOT/rootds
+    gettext_printf "Found ZFS root: %s\n" $dataset >&2
     
     # ensure root mounted
     premounted=$(zfs_property mounted $dataset)
@@ -208,6 +209,7 @@ output_zfs_root() {
     
     # for each kernel
     for i in $kernels; do
+        gettext_printf "  Found linux image: %s\n" "/boot/vmlinuz-$kernel" >&2
     
         # output advanced option
         output_entry zfs advanced $dataset "$i" 4
