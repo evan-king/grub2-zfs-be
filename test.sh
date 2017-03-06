@@ -1,6 +1,24 @@
 #!/bin/bash
 set -e
 
+function findUser() {
+    thisPID=$$
+    origUser=$(whoami)
+    thisUser=$origUser
+
+    while [ "$thisUser" = "$origUser" ]
+    do
+        ARR=($(ps h -p$thisPID -ouser,ppid;))
+        thisUser="${ARR[0]}"
+        myPPid="${ARR[1]}"
+        thisPID=$myPPid
+    done
+
+    getent passwd "$thisUser" | cut -d: -f1
+}
+
+echo "logged in: $(findUser)"
+
 restore_grub_cfg() {
     cp "/boot/grub/grub.cfg-orig" "/boot/grub/grub.cfg"
 }
@@ -11,4 +29,6 @@ cp "./15_linux_zfs.sh" "/etc/grub.d/15_linux_zfs"
 
 update-grub
 
-cp "/boot/grub/grub.cfg" "./current.sh"
+cat "/boot/grub/grub.cfg" | sed '/### BEGIN \/etc\/grub.d\/15_linux_zfs ###/,/### END \/etc\/grub.d\/15_linux_zfs ###/!d' > "./current.sh"
+chown $(findUser) ./current.sh
+chmod u+rw ./current.sh

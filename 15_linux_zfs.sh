@@ -17,21 +17,37 @@ vt_handoff="1"
 
 CLASS="--class gnu-linux --class gnu --class os"
 SUPPORTED_INITS="sysvinit:/lib/sysvinit/init systemd:/lib/systemd/systemd upstart:/sbin/upstart"
+MOUNT_BASE=
+
+# get_device dirname? -> str
+# GLOBALS: $GRUB_DEVICE, $GRUB_DEVICE_BOOT
+get_device() {
+    if [ x$dirname = x/ ]; then
+        printf $GRUB_DEVICE
+    else
+        printf $GRUB_DEVICE_BOOT
+    fi
+}
 
 # get_distributor: void -> str
 get_distributor() {
     if [ x$GRUB_DISTRIBUTOR = x ] ; then
-        echo "GNU/Linux"
+        printf "GNU/Linux"
     else
         case $GRUB_DISTRIBUTOR in
-            Ubuntu|Kubuntu) echo $GRUB_DISTRIBUTOR ;;
-            *) echo "$GRUB_DISTRIBUTOR GNU/Linux" ;;
+            Ubuntu|Kubuntu) printf $GRUB_DISTRIBUTOR ;;
+            *) printf "$GRUB_DISTRIBUTOR GNU/Linux" ;;
         esac
     fi
 }
 
-# get_recovery_flags: void -> str
+# get_recovery_flags: type -> str
+# GLOBALS: $ubuntu_recovery
 get_recovery_flags() {
+    type=$1
+    if [ x$type != xrecovery ]; then
+        return 0
+    fi
     if [ -x /lib/recovery-mode/recovery-menu ]; then
         flags=recovery
     else
@@ -40,7 +56,72 @@ get_recovery_flags() {
     if [ x$ubuntu_recovery = x1 ]; then
         flags="$flags nomodeset"
     fi
-    echo $flags
+    printf $flags
+}
+
+# get_recordfail: void -> str
+# GLOBALS: $quick_boot
+get_recordfail() {
+    if [ x$quick_boot = x1 ]; then
+        printf recordfail
+    fi
+}
+
+# get_videoload: void -> str
+# GLOBALS: $GRUB_PAYLOAD_LINUX
+get_videoload() {
+    if [ x$GRUB_GFXPAYLOAD_LINUX != xtext ]; then
+        printf load_video
+    fi
+}
+
+# get_gfxmode: type -> str
+# GLOBALS: $GRUB_PAYLOAD_LINUX, $ubuntu_recovery, $gfxpayload_dynamic
+get_gfxmode() {
+    if ([ x$ubuntu_recovery = x0 ] || [ x$type != xrecovery ]) && \
+        ([ x$GRUB_GFXPAYLOAD_LINUX != x ] || [ x$gfxpayload_dynamic = x1 ]); then
+        printf "gfxmode \$linux_gfx_mode"
+    fi
+}
+
+# get_label: name[, type[, kernel]] -> str 
+get_label() {
+    name=$1
+    type=$2
+    kernel=$3
+    
+    case $type in
+        menu)
+            gettext_printf "Advanced options for %s" $name
+            ;;
+        recovery)
+            gettext_printf "%s, with Linux %s, recovery mode" $name $kernel
+            ;;
+        advanced)
+            gettext_printf "%s, with Linux %s" $name $kernel
+            ;;
+        *)
+            printf "$name"
+            ;;
+    esac
+}
+
+# get_grub_args: void -> str
+# GLOBALS: $GRUB_CMDLINE_LINUX, $GRUB_CMDLINE_LINUX_DEFAULT
+get_grub_args() {
+    echo "$GRUB_CMDLINE_LINUX $GRUB_CMDLINE_LINUX_DEFAULT"
+}
+
+# get_entry_id: prefix, type[, kernel] -> str
+# TODO: abstract out $GRUB_DEVICE_UUID
+get_entry_id() {
+    prefix=$1
+    type=$2
+    kernel="-$3"
+    if [ x$type = xsimple ] || [ x$type = xmenu ]; then
+        kernel=
+    fi
+    echo "$prefix-$type$kernel-$GRUB_DEVICE_UUID"
 }
 
 # list_zfs_roots: void -> [dataset]
@@ -70,12 +151,12 @@ idstring() {
 
 # mount_root: dataset -> mountpath
 mount_root() {
-    dataset=$1 # syspool/ROOT/ubuntu
+    dataset=$1 # rpool/ROOT/rootds
     tmppath=$(mktemp -d)
     # requires working temporary mount properties:
     # zfs mount -o mountpoint=$2 -o readonly=on $1
     mount -t zfs -o ro -o zfsutil $dataset $tmppath
-    echo $tmppath
+    printf $tmppath
     
 }
 
@@ -102,7 +183,7 @@ END
 
 # output_zfs_root: dataset -> void
 output_zfs_root() {
-    dataset=$1
+    dataset=$1 # rpool/ROOT/rootds
     
     # ensure root mounted
     premounted=$(zfs_property mounted $dataset)
@@ -111,6 +192,7 @@ output_zfs_root() {
     else
         mountpath=$(mount_root $dataset)
     fi
+    MOUNT_BASE=$mountpath
     
     # enumerate kernels
     kernels=$(list_kernels $mountpath)
@@ -122,7 +204,7 @@ output_zfs_root() {
     output_entry zfs simple $dataset $latestkernel 0
     
     # start submenu
-    output_entry zfs menustart $dataset
+    echo "submenu '$(get_label $(get_zfs_name $dataset) menu)' \$menuentry_id_option $(get_entry_id gnulinux menu) {"
     
     # for each kernel
     for i in $kernels; do
@@ -137,8 +219,10 @@ output_zfs_root() {
         
     done
     
+    MOUNT_BASE=
+    
     # end submenu
-    output_entry zfs menuend $dataset
+    echo "}"
     
     # ensure tmp-mount unmounted
     if [ x$premounted != xyes ]; then
@@ -146,84 +230,78 @@ output_zfs_root() {
     fi
 }
 
+# boot_msg: str[, arg...] -> str|void
+# GLOBALS: $quiet_boot
+boot_msg() {
+    msg="$1"
+    shift
+    if [ x"$quiet_boot" = x0 ] || [ x"$type" != xsimple ]; then
+        printf "echo '$(gettext "$msg")'" "$@"
+    fi
+}
+
+# get_zfs_name: str
+get_zfs_name() {
+    root=$1
+    echo "$(get_distributor) ($(echo $root | sed 's/.*\///g'))" # Ubuntu (rootds)
+}
+
+# output_entry: fstype, type, root, kernel[, indent] -> str
 output_entry() {
     fstype=$1 # zfs|btrfs|lvm|legacy (currently only supporting zfs)
     type=$2 # simple|advanced|recovery
-    root=$3 # syspool/ROOT/ubuntu
-    kernel=$4 # 4.4.0-64-generic
-    indent=${5:-0} # 4
+    root=$3 # zfs: rpool/ROOT/rootds, *: ?
+    kernel=$4 # 4.4.0-64-generic[.efi.signed]
+    indent=${5:-0} # 0|4
     
-    deviceid=$GRUB_DEVICE_UUID
-    rootname=$(echo $root | sed 's/.*\///g') # ubuntu
-    rootdash=$(idstring $root) # syspool_root_ubuntu
-    #rootdash=$(echo $root |  sed 's/\//-/g') # syspool-ROOT-ubuntu
-    rootnopool=$(echo $root | sed 's/^[^/]*//g') # /ROOT/ubuntu
-    distributor=$(get_distributor)
-    
-    label="$distributor ($rootname)"
-    
-    case $type in
-        menustart)
-            label="Advanced options for $label"
-            entryid="gnulinux-$rootdash-$type-$deviceid"
-            indent_multiline $indent "submenu '$label' \$menuentry_id_option $entryid {"
-            return 0
+    case $fstype in
+        zfs)
+            pathboot=$(echo $root | sed 's/^[^/]*//g')@/boot # /ROOT/rootds@/boot
+            entryid="$(get_entry_id gnulinux-$(idstring $root) $type $kernel)"
+            name="$(get_distributor) ($(echo $root | sed 's/.*\///g'))" # Ubuntu (rootds)
             ;;
-        menuend)
-            indent_multiline $indent "}"
-            return 0
-            ;;
-        recovery)
-            label="$label, with Linux $kernel (recovery mode)"
-            entryid="gnulinux-$rootdash-$kernel-$type-$deviceid"
-            recovery=$(get_recovery_flags)
-            ;;
-        advanced)
-            label="$label, with Linux $kernel"
-            entryid="gnulinux-$rootdash-$kernel-$type-$deviceid"
-            recovery=
-            ;;
-        simple|*)
-            label=$label
-            entryid="gnulinux-$rootdash-$type-$deviceid"
-            recovery=
+        *)
+            pathboot="/boot"
+            entryid="$(get_entry_id gnulinux $type $kernel)"
+            name="$(get_distributor)" # Ubuntu
             ;;
     esac
     
-    msgkernel=
-    msginit=
-    if [ x"$quiet_boot" = x0 ] || [ x"$type" != xsimple ]; then
-        msgkernel="echo '$(gettext_printf "Loading Linux %s ..." ${kernel})'"
-        msginit="echo '$(gettext_printf "Loading initial ramdisk ...")'"
+    
+    # kernel already contains efi suffix
+    efisuffix=
+    if test -d $MOUNT_BASE/sys/firmware/efi && test -e "$MOUNT_BASE/boot/vmlinuz-$kernel.efi.signed"; then
+        efisuffix=".efi.signed"
     fi
     
     text=$(cat << EOF
-menuentry '$label' $CLASS \$menuentry_id_option '$entryid' {
-    recordfail
-    load_video
-    gfxmode \$linux_gfx_mode
-    insmod gzio
-    if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
-    insmod part_gpt
-    insmod zfs
-    set root='hd0,gpt1'
-    if [ x\$feature_platform_search_hint = xy ]; then
-      search --no-floppy --fs-uuid --set=root --hint-bios=hd0,gpt1 --hint-efi=hd0,gpt1 --hint-baremetal=ahci0,gpt1 $deviceid
-    else
-      search --no-floppy --fs-uuid --set=root $deviceid
-    fi
-    $msgkernel
-    linux $rootnopool@/boot/vmlinuz-$kernel root=ZFS=$root ro $recovery net.ifnames=0 quiet splash \$vt_handoff
-    $msginit
-    initrd $rootnopool@/boot/initrd.img-$kernel
-}
+$(get_recordfail)
+$(get_videoload)
+$(get_gfxmode $type)
+insmod gzio
+if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
+$(prepare_grub_to_access_device $(get_device))
+$(boot_msg "Loading Linux %s ..." $kernel)
+linux $pathboot/vmlinuz-$kernel root=ZFS=$root ro $(get_recovery_flags $type) $(get_grub_args) \$vt_handoff
+$(boot_msg "Loading initial ramdisk ...")
+initrd $pathboot/initrd.img-$kernel
 EOF
 )
 
-    indent_multiline "$indent" "${text}"
+    indent_multiline $indent "
+menuentry '$(get_label $name $type $kernel)' $CLASS \$menuentry_id_option '$entryid' {
+$(indent_multiline 4 "$text")
+}"
 }
 
-# generate entries for all roots
-for i in $(list_zfs_roots); do
-    output_zfs_root $i
-done
+
+#if [ "$(which zfs)" != "" ]; then
+
+    # generate entries for all roots
+    for i in $(list_zfs_roots); do
+        output_zfs_root $i
+    done
+    
+#fi
+
+
