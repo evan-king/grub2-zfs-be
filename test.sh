@@ -27,8 +27,14 @@ trap restore_grub_cfg EXIT
 
 cp "./15_linux_zfs.sh" "/etc/grub.d/15_linux_zfs"
 
+out="/boot/grub/grub.cfg"
+fail="$out.new"
+rm "$fail" 2>/dev/null || true
+
 update-grub
 
-cat "/boot/grub/grub.cfg" | sed '/### BEGIN \/etc\/grub.d\/15_linux_zfs ###/,/### END \/etc\/grub.d\/15_linux_zfs ###/!d' > "./current.sh"
+test -e "$fail" && out="$fail"
+
+cat "$out" | sed '/### BEGIN \/etc\/grub.d\/15_linux_zfs ###/,/### END \/etc\/grub.d\/15_linux_zfs ###/!d' > "./current.sh"
 chown $(findUser) ./current.sh
 chmod u+rw ./current.sh
