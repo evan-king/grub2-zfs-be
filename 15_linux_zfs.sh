@@ -320,14 +320,12 @@ find_init() {
     done
 }
 
-# indent_multiline: int, [line] -> [indented_line]
-indent_multiline() {
+# indent_lines: int, [line] -> [indented_line]
+indent_lines() {
     im_numspaces="$1"
     im_text="$2"
     
-    # inexplicably failing presently (previously worked, works in isolated tests)
-    #im_spaces=$(printf %0${im_numspaces}s)
-    im_spaces="    "
+    im_spaces=$(printf %0${im_numspaces}s)
     
 (cat <<END
 $im_text
@@ -410,7 +408,7 @@ get_fs_type() {
     ${grub_probe} --target=fs "$gft_mntpath"
 }
 
-# output_entry: mountpath, type, kernelpath -> str
+# output_entry: mountpath, type, kernelpath[, indent] -> str
 output_entry() {
     oe_mntpath="$1"
     oe_type="$2" # simple|advanced|recovery
@@ -445,10 +443,11 @@ initrd $oe_pathboot/$oe_init
 EOF
 )
     
-    indent_multiline $oe_indent "
+    indent_lines "$oe_indent" "
 menuentry '$oe_label' $CLASS \$menuentry_id_option '$oe_entryid' {
-$(indent_multiline 4 "$oe_text")
-}"
+$(indent_lines 4 "$oe_text")
+}
+"
 }
 
 
