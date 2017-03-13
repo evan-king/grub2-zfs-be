@@ -73,14 +73,13 @@ get_recovery_flags() {
         return 0
     fi
     if [ -x /lib/recovery-mode/recovery-menu ]; then
-        grf_flags=recovery
+        printf "recovery"
     else
-        grf_flags=single
+        printf "single"
     fi
     if [ x$ubuntu_recovery = x1 ]; then
-        grf_flags="$grf_flags nomodeset"
+        printf " nomodeset"
     fi
-    printf $grf_flags
 }
 
 # get_recordfail: void -> str
@@ -213,7 +212,7 @@ get_subvol() {
 # get_volpath: mountpath -> str|void
 get_volpath() {
     gv_mountpath=${1:-/}
-    printf "$(get_device_label "$gv_mountpath")$($grub_mkrelpath "$gv_mountpath")" | sed "s/@//g"
+    printf "$(get_device_label "$gv_mountpath")$(get_subvol "$gv_mountpath")" | sed "s/@//g"
 }
 
 # get_kernel_version: [path] -> [version]
@@ -423,12 +422,12 @@ output_entry() {
     oe_version="$(get_kernel_version "$oe_kernel")"
     oe_label="$(get_entry_label "$oe_mntpath" "$oe_type" "$oe_kernel")"
     oe_entryid="$(get_entry_id "$oe_mntpath" "$oe_type" "$oe_version")"
-    oe_pathboot="$("$grub_mkrelpath" "$(dirname "$oe_kernel")")"
+    oe_pathboot="$("$grub_mkrelpath" "$(dirname "$oe_mntpath$oe_kernel")")"
     oe_init="$(find_init "$oe_mntpath$(dirname "$oe_kernel")" "$oe_version")"
     oe_devroot="$(get_root_device "$oe_mntpath")"
     oe_args="$(get_grub_args $oe_mntpath)"
     
-
+    # TODO: pipe through grep to strip whitespace-only lines
     oe_text=$(cat << EOF
 $(get_recordfail)
 $(get_videoload)
@@ -451,11 +450,11 @@ $(indent_lines 4 "$oe_text")
 }
 
 
-#if [ "$(which zfs)" != "" ]; then
+if [ "$(which zfs)" != "" ]; then
 
     # generate entries for all zfs roots
     for i in $(list_zfs_roots); do
         output_zfs_root $i
     done
     
-#fi
+fi
