@@ -333,6 +333,15 @@ END
 
 }
 
+# strip_blank_lines: [str] -> [str]
+strip_blank_lines() {
+    sbl_text="$1"
+(cat <<END
+$sbl_text
+END
+) | sed '/^\s*$/d'
+}
+
 # get_volume_mountpoint: dataset -> path
 get_volume_mountpoint() {
     gvm_volume="$1"
@@ -391,13 +400,16 @@ output_zfs_root() {
     fi
 }
 
-# boot_msg: str[, arg...] -> str|void
+# boot_msg: type, msg[, arg...] -> str|void
 # GLOBALS: $quiet_boot
 boot_msg() {
-    msg="$1"
+    b_type="$1"
+    b_msg="$2"
     shift
-    if [ x"$quiet_boot" = x0 ] || [ x"$type" != xsimple ]; then
-        printf "echo '$(gettext "$msg")'" "$@"
+    shift
+    
+    if [ "x$quiet_boot" = x0 ] || [ "x$b_type" != xsimple ]; then
+        printf "echo '$(gettext "$b_msg")'" "$@"
     fi
 }
 
@@ -427,17 +439,16 @@ output_entry() {
     oe_devroot="$(get_root_device "$oe_mntpath")"
     oe_args="$(get_grub_args $oe_mntpath)"
     
-    # TODO: pipe through grep to strip whitespace-only lines
     oe_text=$(cat << EOF
 $(get_recordfail)
 $(get_videoload)
-$(get_gfxmode $oe_type)
+$(get_gfxmode "$oe_type")
 insmod gzio
 if [ x\$grub_platform = xxen ]; then insmod xzio; insmod lzopio; fi
 $(prepare_grub_to_access_device $(get_device $(dirname "$oe_kernel")))
-$(boot_msg "Loading Linux %s ..." $oe_version)
+$(boot_msg "$oe_type" "Loading Linux %s ..." $oe_version)
 linux $oe_pathboot/$(basename $oe_kernel) root=$oe_devroot ro $(get_recovery_flags $oe_type) $oe_args
-$(boot_msg "Loading initial ramdisk ...")
+$(boot_msg "$oe_type" "Loading initial ramdisk ...")
 initrd $oe_pathboot/$oe_init
 EOF
 )
