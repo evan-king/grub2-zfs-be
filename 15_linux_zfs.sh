@@ -111,7 +111,8 @@ get_gfxmode() {
 get_entry_label() {
     gel_mntpath=$1
     gel_type=${2:-simple}
-    gel_kernel=$3
+    gel_init=$3
+    gel_kernel=$4
     
     gel_version="$(get_kernel_version "$gel_kernel")"
     
@@ -130,7 +131,11 @@ get_entry_label() {
             gettext_printf "%s, with Linux %s, recovery mode" "$gel_name" "$gel_version"
             ;;
         advanced)
-            gettext_printf "%s, with Linux %s" "$gel_name" "$gel_version"
+            if [ x"$gel_init" != x ]; then
+                gettext_printf "%s, with Linux %s, init %s" "$gel_name" "$gel_version" "$gel_init"
+            else
+                gettext_printf "%s, with Linux %s" "$gel_name" "$gel_version" 
+            fi
             ;;
         *)
             printf "$gel_name"
@@ -143,23 +148,22 @@ get_entry_label() {
 get_entry_id() {
     gei_rootpath=$1
     gei_type=$2
-    gei_kernel="-$3"
-    if [ x$gei_type = xsimple ] || [ x$gei_type = xmenu ]; then
-        gei_kernel=
-    fi
+    gei_init=$3
+    gei_kernel=$4
     
-    gei_prefix="gnulinux"
-    if [ x$gei_rootpath != x ]; then
-        gei_prefix="$gei_prefix-$(idstring "$(get_volpath "$gei_rootpath")")"
-    fi
-    
-    printf "$gei_prefix-$gei_type$gei_kernel-$GRUB_DEVICE_UUID"
+    printf "gnulinux-"
+    if [ x"$gei_rootpath" != x ]; then printf "$(idstring "$(get_volpath "$gei_rootpath")")-"; fi
+    printf "$gei_type-"
+    if [ x"$gei_type" != xsimple ] && [ x"$gei_type" != xmenu ]; then printf "$gei_kernel-"; fi
+    if [ x"$gei_init" != x ]; then printf "$gei_init-"; fi
+    printf "$GRUB_DEVICE_UUID"
 }
 
-# get_grub_args: mountpath -> str
+# get_grub_args: mountpath[, initpath] -> str
 # GLOBALS: $GRUB_CMDLINE_LINUX, $GRUB_CMDLINE_LINUX_DEFAULT, $vt_handoff
 get_grub_args() {
     gga_mntpath=${1:-/}
+    gga_init="$2"
     
     # add subvol flag for btrfs roots
     if [ x$(get_fs_type "$gga_mntpath") = xbtrfs ]; then
@@ -168,6 +172,11 @@ get_grub_args() {
     
     # add standard configured flags
     printf "$GRUB_CMDLINE_LINUX $GRUB_CMDLINE_LINUX_DEFAULT"
+    
+    # add init specification
+    if [ x"$gga_init" != x ]; then
+        printf " init=$gga_init"
+    fi
     
     # add vt_handoff
     if [ x$vt_handoff = x1 ]; then printf " \$vt_handoff"; fi
@@ -258,6 +267,18 @@ $lk_kernels}"
         | sort -r --version-sort
 }
 
+# list_extra_inits: basepath -> [initpath]
+# GLOBALS: $SUPPORTED_INITS
+list_extra_inits() {
+    lei_base="${1:-/}"
+    
+    for lei_init in $SUPPORTED_INITS; do
+        lei_path="${lei_init#*:}"
+        if [ ! -x "$lei_base$lei_path" ]; then continue; fi
+        if [ "$(readlink -f $lei_base/sbin/init)" = "$lei_path" ]; then continue; fi
+        echo "$lei_init"
+    done
+}
 # zfs_property: propname, dataset -> value
 zfs_property() {
     zfs get -H -t filesystem -o value $1 $2
@@ -290,14 +311,14 @@ umount_zfs_root() {
     rmdir $uzr_tmppath
 }
 
-# find_init: basepath, kernelversion -> [initpath]
+# find_initrd: basepath, kernelversion -> [initrdpath]
 # GLOBALS: $GENKERNEL_ARCH
-find_init() {
+find_initrd() {
     fi_basepath="$1"
     fi_version="$2"
     fi_alt_version="$(echo $fi_version | sed -e "s,\.old$,,g")"
     
-    for fi_i in "initrd.img-${fi_version}" \
+    for fi_img in "initrd.img-${fi_version}" \
         "initrd-${fi_version}.img" \
         "initrd-${fi_version}.gz" \
         "initrd-${fi_version}" \
@@ -311,9 +332,9 @@ find_init() {
         "initramfs-genkernel-${GENKERNEL_ARCH}-${fi_version}" \
         "initramfs-genkernel-${GENKERNEL_ARCH}-${fi_alt_version}"
     do
-        if test -e "$fi_basepath/${fi_i}" ; then
-            #report "  Found initrd image: %s" "$fi_i"
-            printf "$fi_i"
+        if test -e "$fi_basepath/${fi_img}" ; then
+            #report "  Found initrd image: %s" "$fi_img"
+            printf "$fi_img"
             return 0
         fi
     done
@@ -378,15 +399,20 @@ output_zfs_root() {
     echo "submenu '$(get_entry_label "$ozr_mountpath" menu)' \$menuentry_id_option $(get_entry_id "$ozr_mountpath" menu) {"
     
     # for each kernel
-    for ozr_i in $ozr_kernels; do
-        report "  Found linux image: %s" "$ozr_i"
+    for ozr_kern in $ozr_kernels; do
+        report "  Found linux image: %s" "$ozr_kern"
     
         # output advanced option
-        output_entry "$ozr_mountpath" advanced "$ozr_i" 4
+        output_entry "$ozr_mountpath" advanced "$ozr_kern" "" 4
+        
+        # output additional advanced options for alternate inits
+        for ozr_init in "$(list_extra_inits "$ozr_mountpath")"; do
+            output_entry "$ozr_mountpath" advanced "$ozr_kern" "$ozr_init" 4
+        done
         
         # output recovery option
         if [ x${GRUB_DISABLE_RECOVERY} != xtrue ]; then
-            output_entry "$ozr_mountpath" recovery "$ozr_i" 4
+            output_entry "$ozr_mountpath" recovery "$ozr_kern" "" 4
         fi
         
     done
@@ -419,25 +445,27 @@ get_fs_type() {
     ${grub_probe} --target=fs "$gft_mntpath"
 }
 
-# output_entry: mountpath, type, kernelpath[, indent] -> str
+# output_entry: mountpath, type, kernelpath[, init[, indent]] -> str
 output_entry() {
     oe_mntpath="$1"
     oe_type="$2" # simple|advanced|recovery
     oe_kernel="$3" # /boot/vmlinuz-4.4.0-64-generic[.efi.signed]
-    oe_indent="${4:-0}" # 0|4
+    oe_init="$4" # systemd:/lib/systemd/init
+    oe_indent="${5:-0}" # 0|4
     
     # switch to efi (is this redundant?)
     if test -d $oe_mntpath/sys/firmware/efi && test -e "$oe_mntpath$oe_kernel.efi.signed"; then
         oe_kernel="$oe_kernel.efi.signed"
     fi
     
+    oe_init_type=${oe_init%:*}
     oe_version="$(get_kernel_version "$oe_kernel")"
-    oe_label="$(get_entry_label "$oe_mntpath" "$oe_type" "$oe_kernel")"
-    oe_entryid="$(get_entry_id "$oe_mntpath" "$oe_type" "$oe_version")"
+    oe_label="$(get_entry_label "$oe_mntpath" "$oe_type" "$oe_init_type" "$oe_kernel")"
+    oe_entryid="$(get_entry_id "$oe_mntpath" "$oe_type" "$oe_init_type" "$oe_version")"
     oe_pathboot="$("$grub_mkrelpath" "$(dirname "$oe_mntpath$oe_kernel")")"
-    oe_init="$(find_init "$oe_mntpath$(dirname "$oe_kernel")" "$oe_version")"
+    oe_initrd="$(find_initrd "$oe_mntpath$(dirname "$oe_kernel")" "$oe_version")"
     oe_devroot="$(get_root_device "$oe_mntpath")"
-    oe_args="$(get_grub_args $oe_mntpath)"
+    oe_args="$(get_grub_args "$oe_mntpath" "${oe_init#*:}")"
     
     oe_text=$(cat << EOF
 $(get_recordfail)
@@ -449,7 +477,7 @@ $(prepare_grub_to_access_device $(get_device $(dirname "$oe_kernel")))
 $(boot_msg "$oe_type" "Loading Linux %s ..." $oe_version)
 linux $oe_pathboot/$(basename $oe_kernel) root=$oe_devroot ro $(get_recovery_flags $oe_type) $oe_args
 $(boot_msg "$oe_type" "Loading initial ramdisk ...")
-initrd $oe_pathboot/$oe_init
+initrd $oe_pathboot/$oe_initrd
 EOF
 )
     
