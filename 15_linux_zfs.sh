@@ -120,7 +120,7 @@ get_entry_label() {
     gel_name=$(get_distributor)
     gel_pathkern="$(get_volpath "$gel_mntpath")"
     if [ x$gel_pathkern != x ]; then
-        gel_name="$gel_name ($(get_device_label "$gel_mntpath")$gel_pathkern)"
+        gel_name="$gel_name ($gel_pathkern)"
     fi
     
     case $gel_type in
@@ -232,7 +232,7 @@ get_kernel_version() {
 # list_zfs_roots: void -> [dataset]
 list_zfs_roots() {
     # A dataset is considered a root if it has properties mountpoint=/ and canmount=noauto
-    zfs list -H -o name,canmount,mountpoint | grep -oP ".*(?=\tnoauto\t/$)"
+    zfs list -H -o name,canmount,mountpoint -s creation | grep -oP ".*(?=\tnoauto\t/$)"
 }
 
 # list_kernels: mountpath -> [kernelpath]

@@ -19,18 +19,31 @@ developers.  Use at your own risk.
 ## grub-mkconfig
 
 At present the primary utility provided is a grub-mkconfig helper script
-`11_linux_zfs`, built to run alongside/after and eventually replace
+`15_linux_zfs`, built to run alongside/after and eventually replace
 `/etc/grub.d/10_linux`.  In its current state, the script *only* supports
-zfs roots with some menu entry details still hard-coded to my specific local
-environment and configuration.
+zfs roots with some menu entry details still hard-coded to my specific
+local environment and configuration.
 
-**Warning**: I have no prior experience scripting bootloader configuration
-logic.  My goal is to *theoretically* restore full generality as reverse
--engineered from the original script, but only to test and maintain support
-for my own systems and the narrow conditions they represent (bios not
-efi, zfs and ext4 roots, systemd as init, Ubuntu 16.04 as distribution,
-minimal to no variation in hardware or disc setup, and root device identified
-by uuid).  Any path to maturity and stability will depend on the interest
-and participation of more experienced systems developers, who may not
-find original `10_linux` script nearly as objectionable as I do, nor extending
-its functionality nearly as daunting.
+Use the included test.sh script to non-destructively determine whether
+your configuration is supported.  EFI booting is theoretically supported
+but untested.  Due to the limited range of test environments and unstable
+state, even when installed the script will not replace stock grub scripts
+the entries they generate.  Boot-environment-specific entries will appear
+after the stock entries.
+
+## beadm-alt
+
+Lightweight partial implementation of beadm that can list, create, destroy,
+and activate boot environments.  (Activation requires `GRUB_DEFAULT=saved`
+in `/etc/default/grub`.)
+
+Supported options:
+ - beadm list
+ - beadm create [-a] [-e bename@snapname] bename
+ - beadm destroy bename
+ - beadm activate bename
+
+Creating boot environments across pools is not supported, nor even is
+creating a boot environment in a location separate from the origin dataset.
+However, manually created boot environments in separate datasets will
+be correctly understood so long as no collissions occur on dataset name.
