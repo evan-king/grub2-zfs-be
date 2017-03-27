@@ -46,6 +46,24 @@ list_primary_grub_ids() {
         | sed -r 's/^.*\$menuentry_id_option\W'"'"'(.*)'"'"'.*$/\1/g'
 }
 
+# get_current_be: void -> bename
+get_current_be() {
+    mount | grep " on / " | sed -r "s;^.*/(.*) on / .*;\1;g"
+}
+
+# get_active_be: void -> bename
+get_active_be() {
+    saved_entry=""
+    source /boot/grub/grubenv
+    
+    for gab_be in $(list_zfs_roots) ; do
+        if echo "$saved_entry" | grep --silent $(idstring $gab_be) ; then
+            echo $gab_be | sed "s;^.*/;;g"
+            break
+        fi
+    done
+}
+
 # get_bebase: bename|void -> rpool/ROOT
 # Show full path of specified or original boot environment
 get_bebase() {
